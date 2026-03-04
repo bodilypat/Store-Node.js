@@ -1,19 +1,48 @@
 //src/controllers/saleController.js # with Stock update + transaction 
 
 const Sale = require('../models/Sale');
+const StockHistory = require('../models/StockHistory');
 const Product = require('../models/Product');
-
 
 // Create a new sale
 exports.createSale = async (req, res) => {
-    const { customer_id, items } = req.body;
     try {
-        const sale = new Sale({ customer_id, items });
-        await sale.save();
+        const { items, totalAmount } = req.body;
+
+        const sale = await Sale.create({ items, totalAmount });
+        
+        for (let item of items) {
+            const product = await Product.findById(item.productId);
+
+            if (!product || product.stockQuantity < item.quantity) {
+                return res.status(400).json({ error: `Insufficient stock for product ${product ? product.productName : 'Unknown'}` });
+            }
+
+            const itemTotal = item.quantity * item.sellingPrice;
+            subtotal += itemTotal;
+
+            //deduct stock and save history
+            product.stockQuantity -= item.quantity;
+            await product.save();
+                await StockHistory.create({
+                product: product._id,
+                changeType: 'SALE',
+                quantityChanged: item.quantity,
+                previousStock: product.stockQuantity + item.quantity,
+                newStock: product.stockQuantity,
+                referenceId: sale._id
+            });
+
+            // Emit real-time update 
+            req.io.emit('stockUpdate', {
+                productId: product._id,
+                newStock: product.stockQuantity
+            });
+        }
         res.status(201).json(sale);
     } catch (error) {
         res.status(400).json({ error: error.message });
-    }   
+    }
 };
 
 // Get all sales
